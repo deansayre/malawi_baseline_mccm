@@ -16,14 +16,15 @@ if (!require(pacman)) {
       install.packages("pacman", dependencies = TRUE)
 }
 
-pacman::p_load(DT, 
+pacman::p_load_gh("deansayre/Rtesunate", "reconhub/linelist") # loads packages downloaded from GitHub
+
+pacman::p_load(DT,                                            # loads packages downloaded from CRAN
                rio, 
-               linelist, 
                flextable,
                conflicted,
                tidyverse)
 
-conflict_prefer("filter", "dplyr")
+conflict_prefer("filter", "dplyr")                            # creates preference for filter function from dplyr
 ```
 
 
@@ -35,20 +36,16 @@ source("functions.R")
 ```
 
 ## Data
-```{r}
-source("manu_data_import_clean.R")
-```
-
 
 ```{r }
-library(rio)
-mccm_prelim <- rio::import("data_041522.xlsx")   # hard coded for the time being
+
+mccm_redcap <- rio::import("data/data_052222.csv")   # data downloaded from RedCap on 05.22.22
+dict_redcap <- import("dictionary.xlsx")
+q_redcap <- import("questions.xlsx")
   
 
-source("dictionary.R") # pulls in data dictionary for 
+# see "dictionary.R" for information on how dictionary created 
 
-
-names(mccm_prelim)
 ```
 
 
@@ -66,19 +63,20 @@ mccm_prelim %>% datatable(extensions = 'Buttons',
 
 # Cleaning
 ```{r }
-mccm_full <- mccm_prelim %>% 
+mccm_full <- mccm_redcap %>% 
   linelist::clean_data(guess_dates = F) %>% 
   arrange(sdi_householdid, redcap_repeat_instance)   # forces order by household, then individual
  # fill(sdi_interview_date, .direction = "up")   # fills variables for individuals collected at household level
 
 mccm_house <- mccm_full %>% 
-  filter(is.na(redcap_repeat_instance)) %>%              # keeps only those without an individual id entry i.e. households
-  mutate(across(.cols = everything(), ~na_if(.x,""))) %>% 
-  discard(~all(is.na(.)))  %>%                      # removes columns with no data 
+  filter(is.na(redcap_repeat_instance)) %>%         # keeps only those without an individual id entry i.e. households
+  squeaky_clean() %>% 
   mutate(district = factor(word(sdi_householdid, 1, sep = "_")),
          hf = factor(word(sdi_householdid, 2, sep = "_")), 
          catchment = factor(word(sdi_householdid, 3, sep = "_")), 
          household = factor(word(sdi_householdid, 4, sep = "_")))
+
+
 
 
 indiv_num <- c("hdi_b03_month",                 #vector of columns that should remain numeric
@@ -106,10 +104,7 @@ indiv_num <- c("hdi_b03_month",                 #vector of columns that should r
 
 mccm_indiv <- mccm_full %>% 
   filter(!is.na(redcap_repeat_instance)) %>%             # keeps only those with an individual id entry
-  mutate(across(.cols = everything(), ~na_if(.x,""))) %>% 
-  discard(~all(is.na(.))) %>%                    # removes columns with no data 
-  mutate(across(where(is_all_numeric), as.numeric)) %>%  #converts all columns with 100% numeric data to numeric class
-  mutate(across(where(is_all_whole) & !all_of(indiv_num), as.factor)) %>%    #converts numeric classes to factors except those noted
+  squeaky_clean() %>%    #converts numeric classes to factors except those noted
   mutate(unique_id = paste0(sdi_householdid, ".", redcap_repeat_instance), 
          age_yr = ifelse(hdi_b03_age == 0, hdi_b03_month/12, 
                          ifelse(hdi_b03_age == 1, hdi_b03_year, NA_real_)), 
@@ -119,6 +114,8 @@ mccm_indiv <- mccm_full %>%
          household = factor(word(sdi_householdid, 4, sep = "_"))) %>% 
   relocate(unique_id)
 
+
+mccm_true <- import("data/true_cleaned_neno_salima_20220425.dta")
 
 ## finding selection multiple options
 
@@ -186,15 +183,16 @@ multfreqtable = function(data, question.prefix) {
 
 multfreqtable(mccm_indiv, "hmi_sect_seek_cure", yes = 1, no = 0)
 
+
 a <- names(mccm_indiv)[str_detect(names(mccm_indiv), "hmi_sect_seek_cure")]
 z <- length(a)
 temp <- vector("list", z)
 
+
+
 dt <- mccm_indiv %>% 
   select(starts_with("hmi_sect_seek_cure")) %>% 
   mutate(across(.cols = everything(), ~as.numeric(as.character(.)))) %>% 
-#  mutate(across(.cols = everything(), ~recode(., yes = 1,
-#                                              no = 0))) %>% 
   mutate(present = rowSums(across(where(is.numeric)), na.rm = T))  # gives total column, if na there are no data for this column
 
 denominator <- sum(!is.na(dt$present))    # number of observations with at least some data entered
@@ -208,8 +206,8 @@ tots_n <- names(tots)
 tots_fin <- bind_cols(tots_n, tots) %>% 
   rename(var = 1, 
          n = 2) %>% 
-  mutate(perc = n/denominator, 
-         perc1 = n/denom1)
+  mutate(perc = round(100*n/denominator,2), 
+         perc1 = round(100*n/denom1,2))
 
 
 
