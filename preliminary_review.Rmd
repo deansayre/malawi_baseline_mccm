@@ -1,0 +1,385 @@
+---
+title: "Age Expanded Malaria Community Case Management in Malawi"
+author: "TRUE/CDC OR Working Group"
+date: "`r format(Sys.time(), '%A %d %B %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    highlight: zenburn
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_collapse: no
+    toc_depth: 3
+    toc_float: yes
+    css: C:/Users/omp2/OneDrive - CDC/Cambodia_03_25_19/analysis/cambodia_g6pd/style.css
+    includes:
+      before_body: title.html
+---
+
+
+<div class="watermark">PRELIMINARY</div>
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      collapse = TRUE,
+                      fig.width = 7,
+                      fig.height = 6,
+                      dpi = 500,
+                      warning = FALSE,
+                      message = FALSE)
+
+```
+
+
+<!-- ======================================================= -->
+<!-- ======================================================= -->
+<!-- ======================================================= -->
+
+# Basic Metrics {.tabset .tabset-fade .tabset-pills}
+
+```{r}
+pacman::p_load(linelist, 
+               janitor, 
+               Hmisc,
+               ggdist,
+               flextable,
+               tidyverse)
+
+pal <- c("#00447C", "#404756", "#A4ABBD", "#573F02", "#8D6E33")
+```
+
+
+```{r }
+source("functions.R")
+source("data_import_clean.R")
+
+obs <- nrow(mccm_full) %>% 
+  as.numeric()
+
+n_house <- nrow(mccm_house)%>% 
+  as.numeric()
+
+n_indiv <- nrow(mccm_indiv) %>% 
+  as.numeric()
+
+
+#  individual database counts
+unique_hf <- mccm_indiv %>% 
+  distinct(district, hf) %>% 
+  group_by(district) %>% 
+  summarise(facilities = n())
+
+u_hf <- unique_hf %>% 
+  pull(2) %>% 
+  as.numeric()
+
+
+unique_catchment <- mccm_indiv %>% 
+  distinct(district, hf, catchment) %>% 
+  group_by(district, hf) %>% 
+  summarise(villages = n())
+
+min_village <- unique_catchment %>% 
+  pull(2) %>% 
+  as.numeric() %>% 
+  min()
+
+max_village <- unique_catchment %>% 
+  pull(2) %>% 
+  as.numeric() %>% 
+  max()
+
+
+
+latest <- format(max(mccm_house$sdi_interview_date), format = "%d %B %Y")
+earliest <- format(min(mccm_house$sdi_interview_date), format = "%d %B %Y")
+
+
+
+```
+
+Data in this file were collected from `r earliest` to `r latest`. 
+There are`r obs` observations;`r n_indiv` individuals from `r n_house` 
+households. 
+
+Data were obtained from `r u_hf` health facilities, with the number of villages
+in each ranging from `r min_village` to `r max_village`.
+
+# Participant review
+```{r}
+dup_house <- mccm_house %>% 
+  get_dupes(sdi_householdid) %>% 
+  nrow() %>% 
+  as.numeric()
+
+dup_indiv <- mccm_indiv %>% 
+  get_dupes(unique_id) %>% 
+  nrow() %>% 
+  as.numeric()
+
+dup_rdt <- mccm_indiv %>% 
+  filter(!is.na(rdt_blood_id)) %>% 
+  get_dupes(rdt_blood_id) %>% 
+  nrow() %>% 
+  as.numeric()
+
+
+```
+
+There are `r dup_house` duplicated household IDs, `r dup_indiv` duplicated 
+individual study IDs, and `r dup_rdt` duplicated laboratory IDs on dried 
+blood spots.
+
+The following dried blood spot IDs should be verified. They are either 
+internally inconsistent or have the inappropriate number of digits.
+
+```{r}
+rdt_id <- mccm_indiv %>% 
+  filter(!is.na(rdt_blood_id)) %>% 
+  mutate(id_ok = rdt_blood_id==rdt_blood_id_2) %>% 
+  filter(id_ok == F | is.na(id_ok)) %>% 
+  select(sdi_householdid, individual_id, sdi_interview_date, 
+         rdt_blood_id, rdt_blood_id_2)
+
+
+  
+rdt_id2 <- mccm_indiv %>% 
+  filter(!is.na(rdt_blood_id)) %>% 
+  mutate(id_ok = str_length(rdt_blood_id)) %>% 
+  filter(id_ok != 6)%>% 
+  select(sdi_householdid, individual_id, sdi_interview_date, 
+         rdt_blood_id, rdt_blood_id_2) %>% 
+  bind_rows(rdt_id)
+
+
+flextable(rdt_id2)
+
+```
+
+
+``` {r}
+
+unique_household <- mccm_indiv %>% 
+  distinct(district, hf, catchment, household) %>% 
+  group_by(district, hf, catchment) %>% 
+  summarise(households = n()) %>% 
+  ungroup() %>% 
+  mutate(perc = paste0(as.character(round(100*households/33, 0)), "%"))
+  
+  
+
+ggplot(unique_household)+
+  geom_hline(yintercept = 33, linetype = "dashed")+
+  geom_col(aes(x=catchment, y = households), fill = pal[2])+
+  geom_text(aes(catchment, y = households-1.5, label = perc),
+    hjust = 0.45,
+    nudge_y = 0.3,
+    colour = "white",
+    size = 4
+  )+
+  theme_minimal()+
+  labs(x = "Village ID", 
+       y = "Number of Households")+
+  facet_grid(~district)
+```
+
+``` {r}
+unique_indiv <- mccm_indiv %>% 
+  group_by(district, hf, catchment) %>% 
+  summarise(persons = n(), 
+            ill = sum(hdi_b03_ill == 0, na.rm = T),
+            rdt = sum(rdt_done == 0, na.rm = T)) %>% 
+  pivot_longer(!c(district, catchment, hf), names_to = "type", 
+               values_to = "counts") %>% 
+  mutate(type = factor(type, levels = c("persons", 
+                                        "ill", 
+                                        "rdt")))
+
+ggplot(unique_indiv)+
+  geom_col(aes(x=catchment, y = counts, fill = type), position = "dodge2")+
+  scale_fill_manual(values = pal[1:3], labels = c("Participants", "Recently Ill",
+                                                  "RDT Done"))+
+  theme_minimal()+
+  theme(legend.title = element_blank())+
+  labs(x = "Village ID", 
+       y = "Number of Participants")+
+  facet_grid(~district)
+
+
+```
+
+## Household size
+Do not currently have access to enumeration lists to ensure consistency across 
+tools.Here the number of individuals entered per house is compared with the 
+response to the question explicitly asking how many individuals live in the home.
+
+```{r}
+house_num <- mccm_house %>% 
+select(sdi_householdid, hdi_b02_wk)
+
+indiv_num <- mccm_indiv %>% 
+  group_by(sdi_householdid) %>% 
+  summarise(num = n()) %>% 
+  left_join(house_num, by = "sdi_householdid") %>% 
+  filter(num != hdi_b02_wk) %>% 
+  mutate(diff = abs(num - hdi_b02_wk)) %>% 
+  rename(`Participants Entered` = num, 
+         `Response to Question` = hdi_b02_wk)
+
+
+```
+
+The maximum observed difference between these values is `r max(indiv_num$diff)`
+persons. Each household with a discrepancy is shown below. The reasons for each 
+cannot be determined at the data cleaning phase, making changes to the response
+potentially unreliable.
+
+```{r}
+indiv_num %>% 
+  select(-diff) %>% 
+  rename(`Household ID` = sdi_householdid) %>% 
+  flextable()
+```
+
+
+```{r}
+mccm_indiv %>% 
+  group_by(sdi_householdid) %>% 
+  summarise(num = n()) %>% 
+ggplot(aes(x = num)) + 
+  geom_bar()+
+  theme_minimal()+
+  labs(x = "Household Size", 
+       y = "Count")
+  
+```
+
+## Participant age distribution
+```{r}
+ggplot(mccm_indiv, aes(x = age_yr, y = 1)) + 
+  ggdist::stat_halfeye(adjust = .5, 
+    width = .25, 
+    .width = 0, 
+   # justification = -.3, 
+    point_colour = NA) + 
+  geom_boxplot(
+    width = .1, 
+   # outlier.shape = 3, 
+    outlier.color = pal[5], 
+   lwd = 1.5
+  ) +
+  theme_minimal()+
+  labs(x = "Participant age (years)", 
+       y = "")+
+  theme(axis.text.y=element_blank(),
+      axis.ticks.y=element_blank())
+```
+
+# Variable Examination
+The following variables/questions, have no data associated with them. These are
+likely skipped by the survey skip pattern (either appropriately or 
+inappropriately).
+
+```{r}
+
+empty_vars <- mccm_full %>% 
+  keep(~all(is.na(.)))
+
+no_data <- names(empty_vars) %>% 
+  as_tibble() %>% 
+  left_join(questions, by = c("value" = "variable_name")) %>% 
+  rename(`Variable Name` = value, 
+         `Question` = description)
+
+flextable(no_data)
+
+```
+
+
+```{r}
+test <- mccm_indiv %>% 
+  mutate(age_class = case_when(age_yr < 5 ~ "Under5", 
+                               age_yr < 15 ~ "Five_14", 
+                               age_yr <= 100 ~ "15+", 
+                               TRUE ~ "Error"), 
+         hdi_b03_ill = recode(hdi_b03_ill, `0` = "Yes", `1` = "No"),
+         hmi_d01_fever = recode(hmi_d01_fever, `0` = "Yes", `1` = "No", 
+                                `2` = "Don't Know"),
+         hmi_d02_seek_treatment = recode(hmi_d02_seek_treatment, `0` = "Yes", 
+                                         `1` = "No"), 
+         hmi_d02_blood_taken = recode(hmi_d02_blood_taken, `0` = "Yes", `1` = "No", 
+                                `2` = "Don't Know"), 
+         hmi_d02_blood_result = recode(hmi_d02_blood_result, `1` = "Positive",
+                                       `2` = "Negative", 
+                                `3` = "Don't Know"),
+         al = ifelse((md_antimalarial_1 == 1 | md_antimalarial_2 == 1 |
+         md_antimalarial_3 == 1 | md_antimalarial_4 == 1), "Yes", 
+         ifelse((md_antimalarial_17 == 1 | md_antimalarial_5 == 1 | 
+         md_antimalarial_6 == 1 | md_antimalarial_7 == 1 | 
+           md_antimalarial_8 == 1 | md_antimalarial_9 == 1 | 
+           md_antimalarial_10 == 1 | md_antimalarial_11 == 1 | 
+           md_antimalarial_12 == 1 | md_antimalarial_13 == 1 |
+           md_antimalarial_14 == 1 | md_antimalarial_15 == 1 | 
+           md_antimalarial_16 == 1 | md_antimalarial_99 == 1), "Other", "None"))) %>% 
+  group_by(age_class, hdi_b03_ill, hmi_d01_fever, hmi_d02_seek_treatment,
+  hmi_d02_blood_taken, hmi_d02_blood_result, al) %>% 
+  summarise(num = n(), 
+            ids = list(unique_id))
+
+
+bad1 <- test %>% 
+  filter(hdi_b03_ill == "No" & hmi_d01_fever == "Yes")
+
+bad1a <- sum(bad1$num) %>% 
+  as.numeric()
+
+bad2 <- test %>% 
+  filter(hmi_d01_fever == "No" & hmi_d02_seek_treatment == "Yes")
+
+bad2a <- sum(bad2$num) %>% 
+  as.numeric()
+```
+
+There are `r bad1a` individuals listed as not being ill, but having fever in the
+past two weeks. Additionally, `r bad2a` individuals were not listed as having 
+fever but noted seeking care for fever.
+
+A table listing the number of individuals with all combinations of age group, 
+presence of illness in the past two weeks, presence of fever in the past two
+weeks, whether or not care was sought for fever, whether or no blood was taken 
+for a test for malaria, malaria test results and if AL was taken by the 
+individual is listed below.
+
+
+```{r}
+test %>% 
+  select(-ids) %>% 
+flextable()
+```
+
+
+```{r}
+
+#install.packages("misty")
+c <- Hmisc::describe(mccm_indiv)
+a <- mccm_indiv %>% 
+  select(contains("other")) %>% 
+  names()
+
+b <- mccm_indiv %>% 
+  select(-all_of(a))
+
+test <- misty::na.pattern(b)
+misty::na.test(b)
+
+test1 <- test[["result"]] %>% 
+  arrange(desc(n)) %>% 
+  select(-pattern) %>% 
+  slice(-1) %>% 
+  mutate(id = row_number())
+
+```
+

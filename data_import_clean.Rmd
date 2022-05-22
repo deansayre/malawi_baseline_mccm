@@ -1,0 +1,224 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Import {.tabset}
+## Packages
+```{r}
+if (!require(pacman)) {
+      install.packages("pacman", dependencies = TRUE)
+}
+
+pacman::p_load(DT, 
+               rio, 
+               linelist, 
+               flextable,
+               conflicted,
+               tidyverse)
+
+conflict_prefer("filter", "dplyr")
+```
+
+
+## Functions
+```{r}
+# Separate R file with custom functions
+source("functions.R")
+
+```
+
+## Data
+```{r}
+source("manu_data_import_clean.R")
+```
+
+
+```{r }
+library(rio)
+mccm_prelim <- rio::import("data_041522.xlsx")   # hard coded for the time being
+  
+
+source("dictionary.R") # pulls in data dictionary for 
+
+
+names(mccm_prelim)
+```
+
+
+## Raw Data used
+```{r}
+
+mccm_prelim %>% datatable(extensions = 'Buttons',
+            options = list(dom = 'Blfrtip',
+                           buttons = c('pdf', 'excel'),
+                          lengthMenu  = list(c(10,25,50,-1),
+                                             c(10,25,50,"All"))))
+
+```
+
+
+# Cleaning
+```{r }
+mccm_full <- mccm_prelim %>% 
+  linelist::clean_data(guess_dates = F) %>% 
+  arrange(sdi_householdid, redcap_repeat_instance)   # forces order by household, then individual
+ # fill(sdi_interview_date, .direction = "up")   # fills variables for individuals collected at household level
+
+mccm_house <- mccm_full %>% 
+  filter(is.na(redcap_repeat_instance)) %>%              # keeps only those without an individual id entry i.e. households
+  mutate(across(.cols = everything(), ~na_if(.x,""))) %>% 
+  discard(~all(is.na(.)))  %>%                      # removes columns with no data 
+  mutate(district = factor(word(sdi_householdid, 1, sep = "_")),
+         hf = factor(word(sdi_householdid, 2, sep = "_")), 
+         catchment = factor(word(sdi_householdid, 3, sep = "_")), 
+         household = factor(word(sdi_householdid, 4, sep = "_")))
+
+
+indiv_num <- c("hdi_b03_month",                 #vector of columns that should remain numeric
+               "hdi_b03_year", 
+               "hmi_arrival_time", 
+               "hmi_wait_time", 
+               "hmi_sick_duration", 
+               "hmi_off_dur", 
+               "hmi_pay_care", 
+               "hmi_amount_consult", 
+               "hmi_amount_rdt", 
+               "hmi_amount_trans", 
+               "hmi_total_pay", 
+               "md_med_duration", 
+               "diar_days_aftertreat", 
+               "diar_med_amount", 
+               "diar_consult_amount",
+               "diar_trans_amount", 
+               "diar_total_pay")
+
+  
+  
+  
+
+
+mccm_indiv <- mccm_full %>% 
+  filter(!is.na(redcap_repeat_instance)) %>%             # keeps only those with an individual id entry
+  mutate(across(.cols = everything(), ~na_if(.x,""))) %>% 
+  discard(~all(is.na(.))) %>%                    # removes columns with no data 
+  mutate(across(where(is_all_numeric), as.numeric)) %>%  #converts all columns with 100% numeric data to numeric class
+  mutate(across(where(is_all_whole) & !all_of(indiv_num), as.factor)) %>%    #converts numeric classes to factors except those noted
+  mutate(unique_id = paste0(sdi_householdid, ".", redcap_repeat_instance), 
+         age_yr = ifelse(hdi_b03_age == 0, hdi_b03_month/12, 
+                         ifelse(hdi_b03_age == 1, hdi_b03_year, NA_real_)), 
+         district = factor(word(sdi_householdid, 1, sep = "_")), 
+         hf = factor(word(sdi_householdid, 2, sep = "_")), 
+         catchment = factor(word(sdi_householdid, 3, sep = "_")), 
+         household = factor(word(sdi_householdid, 4, sep = "_"))) %>% 
+  relocate(unique_id)
+
+
+## finding selection multiple options
+
+
+
+# provides variables in individual database that AREN'T in options/data dictionary. # Some variables that are no multiple choice questions aren't lised in data dictionary, but this also gives the ones that have numbers appended to the end (which is how multi-selects are handled)
+
+a <- setdiff(names(mccm_indiv), unique(options$`Variable / Field Name`)) %>%   
+  as.data.frame() %>% 
+  rename(variable = 1) %>% 
+  filter(str_detect(variable, "_\\d+$")) %>%     # only those that end with a digit after an underscore
+  mutate(variable1 = word(variable , 1  , -2, sep = "_"))  # removes last "word" in string (the terminal digit)
+  
+b <- unique(a$variable1)  ## list of likely candidates for select mulitple option questions
+
+temp_dict <- options %>% 
+  dplyr::filter(`Variable / Field Name` %in% b) %>% 
+  linelist::clean_data(guess_dates = F) %>% 
+  mutate(variable1 = paste0(variable_field_name, "_", att), 
+         variable2 = paste0(variable_field_name, "_", value)) %>% 
+  select(variable1, variable2) %>% 
+  relocate(variable2) %>% 
+  tibble::deframe()
+
+temp_dict1 <- options %>% 
+  dplyr::filter(`Variable / Field Name` %in% b) %>% 
+  linelist::clean_data(guess_dates = F) %>% 
+  mutate(new_var = paste0(variable_field_name, "_", value)) %>% 
+  select(new_var) %>% 
+  #relocate(variable2) %>% 
+  tibble::deframe()
+
+c <- setdiff(temp_dict, names(mccm_indiv))
+d <- setdiff(temp_dict1, names(mccm_indiv))
+
+temp_dict2 <- temp_dict[!temp_dict %in% c]
+temp_dict3 <- temp_dict1[!temp_dict1 %in% c]
+
+indiv <- mccm_indiv %>% 
+  dplyr::rename(!!temp_dict2) %>% 
+  janitor::clean_names() %>% 
+  mutate(across(all_of(temp_dict2), ~factor(.)))
+
+names(indiv)
+
+multfreqtable = function(data, question.prefix) {
+  z = length(question.prefix)
+  temp = vector("list", z)
+
+  for (i in 1:z) {
+    a = grep(question.prefix[i], names(data))
+    b = sum(data[, a] != 0, na.rm = T)
+    d = colSums(data[, a] != 0, na.rm = T)
+    e = sum(rowSums(data[,a], na.rm = T) !=0, na.rm = T)
+    f = as.numeric(c(d, b))
+    temp[[i]] = data.frame(question = c(sub(question.prefix[i], 
+                                            "", names(d)), "Total"),
+                           freq = f,
+                           percent_response = (f/b)*100,
+                           percent_cases = (f/e)*100 )
+    names(temp)[i] = question.prefix[i]
+  }
+  temp
+}
+
+multfreqtable(mccm_indiv, "hmi_sect_seek_cure", yes = 1, no = 0)
+
+a <- names(mccm_indiv)[str_detect(names(mccm_indiv), "hmi_sect_seek_cure")]
+z <- length(a)
+temp <- vector("list", z)
+
+dt <- mccm_indiv %>% 
+  select(starts_with("hmi_sect_seek_cure")) %>% 
+  mutate(across(.cols = everything(), ~as.numeric(as.character(.)))) %>% 
+#  mutate(across(.cols = everything(), ~recode(., yes = 1,
+#                                              no = 0))) %>% 
+  mutate(present = rowSums(across(where(is.numeric)), na.rm = T))  # gives total column, if na there are no data for this column
+
+denominator <- sum(!is.na(dt$present))    # number of observations with at least some data entered
+denom1 <- sum(dt$present, na.rm = T)
+
+dt1 <- mccm_indiv %>% 
+  select(starts_with("hmi_sect_seek_cure")) %>% 
+  mutate(across(.cols = everything(), ~as.numeric(as.character(.))))
+tots <- colSums(dt1, na.rm = T)
+tots_n <- names(tots)
+tots_fin <- bind_cols(tots_n, tots) %>% 
+  rename(var = 1, 
+         n = 2) %>% 
+  mutate(perc = n/denominator, 
+         perc1 = n/denom1)
+
+
+
+
+```
+
+# Inspection
+
+```{r}
+
+```
+
