@@ -1,17 +1,39 @@
 ---
-title: "Untitled"
-output: html_document
+title: "Age Expanded Malaria Community Case Management in Malawi"
+author: "TRUE/CDC OR Working Group"
+date: "`r format(Sys.time(), '%A %d %B %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    highlight: zenburn
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_collapse: no
+    toc_depth: 3
+    toc_float: yes
+    css: C:/Users/omp2/OneDrive - CDC/Cambodia_03_25_19/analysis/cambodia_g6pd/style.css
+
 ---
 
+
+<div class="watermark">PRELIMINARY</div>
+
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE,
+                      collapse = TRUE,
+                      fig.width = 7,
+                      fig.height = 6,
+                      dpi = 500,
+                      warning = FALSE,
+                      message = FALSE)
 ```
 
 
 
-# Import {.tabset}
+# Import {.tabset .tabset-fade}
 ## Packages
-```{r}
+```{r class.source = 'fold-show'}
 if (!require(pacman)) {
       install.packages("pacman", dependencies = TRUE)
 }
@@ -29,7 +51,8 @@ conflict_prefer("filter", "dplyr")                            # creates preferen
 
 
 ## Functions
-```{r}
+Currently transitioning to package Rtensunate for functions. 
+```{r eval=F}
 # Separate R file with custom functions
 source("functions.R")
 
@@ -37,11 +60,21 @@ source("functions.R")
 
 ## Data
 
-```{r }
+```{r class.source = 'fold-show'}
 
 mccm_redcap <- rio::import("data/data_052222.csv")   # data downloaded from RedCap on 05.22.22
+
+mccm_true <- import("data/true_cleaned_neno_salima_20220425.dta") %>% 
+  linelist::clean_data(guess_dates = F)
+
+for (var in colnames(mccm_true)) {
+  attr(mccm_true[[deparse(as.name(var))]], "label") <- NULL    #removes label attribute from stata
+  attr(mccm_true[[deparse(as.name(var))]], "format.stata") <- NULL
+}
+
+
 dict_redcap <- import("dictionary.xlsx")
-q_redcap <- import("questions.xlsx")
+q_redcap <- import("questions1.xlsx")
   
 
 # see "dictionary.R" for information on how dictionary created 
@@ -50,7 +83,8 @@ q_redcap <- import("questions.xlsx")
 
 
 ## Raw Data used
-```{r}
+Will only be filled in when output encoded for partners
+```{r eval = F}
 
 mccm_prelim %>% datatable(extensions = 'Buttons',
             options = list(dom = 'Blfrtip',
@@ -61,14 +95,17 @@ mccm_prelim %>% datatable(extensions = 'Buttons',
 ```
 
 
-# Cleaning
+# Cleaning {.tabset}
+## Comparing Cleaned data and data from RedCap
+### Available Variables
+
 ```{r }
 mccm_full <- mccm_redcap %>% 
   linelist::clean_data(guess_dates = F) %>% 
   arrange(sdi_householdid, redcap_repeat_instance)   # forces order by household, then individual
  # fill(sdi_interview_date, .direction = "up")   # fills variables for individuals collected at household level
 
-mccm_house <- mccm_full %>% 
+mccm_red_house <- mccm_full %>% 
   filter(is.na(redcap_repeat_instance)) %>%         # keeps only those without an individual id entry i.e. households
   squeaky_clean() %>% 
   mutate(district = factor(word(sdi_householdid, 1, sep = "_")),
@@ -102,7 +139,7 @@ indiv_num <- c("hdi_b03_month",                 #vector of columns that should r
   
 
 
-mccm_indiv <- mccm_full %>% 
+mccm_red_indiv <- mccm_full %>% 
   filter(!is.na(redcap_repeat_instance)) %>%             # keeps only those with an individual id entry
   squeaky_clean() %>%    #converts numeric classes to factors except those noted
   mutate(unique_id = paste0(sdi_householdid, ".", redcap_repeat_instance), 
@@ -115,7 +152,135 @@ mccm_indiv <- mccm_full %>%
   relocate(unique_id)
 
 
-mccm_true <- import("data/true_cleaned_neno_salima_20220425.dta")
+
+## Cleaned data set received by email #########################################
+
+a <- setdiff(names(mccm_true), names(mccm_full))
+a_df <- q_redcap %>% 
+  filter(`Variable / Field Name` %in% a) %>% 
+  flextable()
+
+b <- setdiff(names(mccm_full), names(mccm_true))
+b_df <- q_redcap %>% 
+  filter(`Variable / Field Name` %in% b)%>% 
+  flextable()
+
+c <- setdiff(unique(q_redcap$`Variable / Field Name`), names(mccm_full))
+c_df <- q_redcap %>% 
+  filter(`Variable / Field Name` %in% c)%>% 
+  flextable()
+
+d <- setdiff(unique(q_redcap$`Variable / Field Name`), names(mccm_true))
+d_df <- q_redcap %>% 
+  filter(`Variable / Field Name` %in% d)%>% 
+  flextable()
+
+e <- setdiff(names(mccm_true), unique(q_redcap$`Variable / Field Name`))
+```
+
+Variables in the cleaned dataset shared by email, but not in RedCap database:
+`r a_df`. 
+
+Variables in the RedCap database but not in the database shared by email:
+`r b_df`
+
+Variables in the defined in the dictionary, but not in the RedCap database:
+`r c_df`
+
+Variables in the defined in the dictionary, but not in the mailed database:
+`r d_df`
+
+**NOTE** Many of these are 'select all that apply' variables, which appear because
+of the way they are coded in the database with an appended number. These 
+variables are unlikely to be truly missing.
+
+### Observations
+
+```{r}
+mccm_true_house <- mccm_true %>% 
+  filter(is.na(individual_id)) %>%         # keeps only those without an individual id entry i.e. households
+  squeaky_clean() %>% 
+  mutate(district = factor(word(sdi_householdid, 1, sep = "_")),
+         hf = factor(word(sdi_householdid, 2, sep = "_")), 
+         catchment = factor(word(sdi_householdid, 3, sep = "_")), 
+         household = factor(word(sdi_householdid, 4, sep = "_")))
+
+
+
+
+indiv_num <- c("hdi_b03_month",                 #vector of columns that should remain numeric
+               "hdi_b03_year", 
+               "hmi_arrival_time", 
+               "hmi_wait_time", 
+               "hmi_sick_duration", 
+               "hmi_off_dur", 
+               "hmi_pay_care", 
+               "hmi_amount_consult", 
+               "hmi_amount_rdt", 
+               "hmi_amount_trans", 
+               "hmi_total_pay", 
+               "md_med_duration", 
+               "diar_days_aftertreat", 
+               "diar_med_amount", 
+               "diar_consult_amount",
+               "diar_trans_amount", 
+               "diar_total_pay")
+
+  
+  
+  
+
+
+mccm_true_indiv <- mccm_true %>% 
+  filter(!is.na(individual_id)) %>%             # keeps only those with an individual id entry
+  squeaky_clean() %>%    #converts numeric classes to factors except those noted
+  mutate(unique_id = paste0(sdi_householdid, ".", individual_id), 
+         #age_yr = ifelse(hdi_b03_age == 0, hdi_b03_month/12,                 column doesn't exist in this set
+         #               ifelse(hdi_b03_age == 1, hdi_b03_year, NA_real_)),   column doesn't exist in this set
+         district = factor(word(sdi_householdid, 1, sep = "_")), 
+         hf = factor(word(sdi_householdid, 2, sep = "_")), 
+         catchment = factor(word(sdi_householdid, 3, sep = "_")), 
+         household = factor(word(sdi_householdid, 4, sep = "_"))) %>% 
+  relocate(unique_id)
+
+a <- arsenal::comparedf(mccm_true_indiv, mccm_red_indiv)
+
+a_df <- a[["vars.summary"]] %>% 
+  slice(-c(165:173)) %>% 
+  mutate(rows = map_int(values, nrow)) %>% 
+  filter(rows > 0)
+
+
+a_display <- a_df %>% 
+  select(Variable = var.x, 
+         `Number Observations Changed` = rows) %>% 
+  flextable()
+
+b <- arsenal::comparedf(mccm_true_house, mccm_red_house)
+
+b_df <- b[["vars.summary"]] %>% 
+  slice(-c(140:145)) %>% 
+  mutate(rows = map_int(values, nrow)) %>% 
+  filter(rows > 0)
+
+b_display <- b_df %>% 
+  select(Variable = var.x, 
+         `Number Observations Changed` = rows) %>% 
+  flextable()
+
+
+a_display
+
+b_display
+```
+Listed above the comparisons of the observations in each data set and how 
+many observations were changed between the RedCap data set (downloaded on 05.22.22)
+and the clean dataset shared via email. More information for each variable is 
+availabe in R by examining the nested dataframe, which explicitly states which
+observations are different and how. 
+
+```{r eval = F}
+### section in progress
 
 ## finding selection multiple options
 
