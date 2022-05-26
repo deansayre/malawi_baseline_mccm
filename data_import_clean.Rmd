@@ -73,8 +73,8 @@ for (var in colnames(mccm_true)) {
 }
 
 
-dict_redcap <- import("dictionary.xlsx")
-q_redcap <- import("questions1.xlsx")
+dict_redcap <- import("data/dictionary.xlsx")
+q_redcap <- import("data/questions1.xlsx")
   
 
 # see "dictionary.R" for information on how dictionary created 
